@@ -1,0 +1,285 @@
+---
+title: "NY Shootings Report"
+author: "Sid Sethi"
+date: "2025-04-24"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+
+
+
+```{r setup, include=FALSE}
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysis Background
+
+This report analyzes historic NYPD Shooting Incident data (Historic). Each record in the dataset represents a shooting event that took place in NY, along with location, time, suspect age, victim age, suspect race and victim race. The report also indicates if the shooting end in a murder. The source of this data is [NYC Shooting Dataset](https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic)
+
+
+## Step 1: Import the data
+```{r get_shooting_data}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+```
+
+## Step 2: Read the data
+```{r import_data, message = FALSE}
+shootings <- read_csv(url_in)
+
+```
+## Step 3: Convert to date format
+```{r get_dateformat}
+shootings <- shootings %>% 
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE), 
+         YEAR = year(OCCUR_DATE))
+```
+## Step 4: Factoring and Removing Long Lat
+
+Making all variables "unknown" if no value is there
+```{r factoring, warning = FALSE}
+valid_ages <- c("<18", "18-24", "25-44", "45-64", "65+")
+
+shootings <- shootings %>% mutate(BORO = fct_explicit_na(factor(BORO), na_level = "Unknown"),
+LOC_OF_OCCUR_DESC = fct_explicit_na(factor(LOC_OF_OCCUR_DESC), na_level = "Unknown"),
+PRECINCT = fct_explicit_na(factor(PRECINCT), na_level = "Unknown"),
+JURISDICTION_CODE = fct_explicit_na(factor(JURISDICTION_CODE), na_level = "Unknown"),
+LOC_CLASSFCTN_DESC = fct_explicit_na(factor(LOC_CLASSFCTN_DESC), na_level = "Unknown"),
+LOCATION_DESC = fct_explicit_na(factor(LOCATION_DESC), na_level = "Unknown"),
+STATISTICAL_MURDER_FLAG = fct_explicit_na(factor(STATISTICAL_MURDER_FLAG), na_level = "Unknown"),
+PERP_SEX = fct_explicit_na(factor(PERP_SEX), na_level = "Unknown"),
+PERP_RACE = fct_explicit_na(factor(PERP_RACE), na_level = "Unknown"),
+VIC_AGE_GROUP = fct_explicit_na(factor(VIC_AGE_GROUP), na_level = "Unknown"),
+VIC_SEX = fct_explicit_na(factor(VIC_SEX), na_level = "Unknown"),
+VIC_RACE = fct_explicit_na(factor(VIC_RACE), na_level = "Unknown"),
+PERP_AGE_GROUP = case_when(
+  PERP_AGE_GROUP %in% valid_ages ~PERP_AGE_GROUP, 
+  TRUE ~ "Unknown"
+), VIC_AGE_GROUP = case_when(
+  VIC_AGE_GROUP %in% valid_ages ~PERP_AGE_GROUP, 
+  TRUE ~ "Unknown"
+))
+
+
+#removing long lat
+shootings <- shootings %>% select(-c(Latitude, Longitude, Lon_Lat))
+
+
+```
+
+## Analysis
+The analysis I want to perform using this dataset is that I want to look at when most shootings happened. I also want to see if there are particular locations where shootings are more prevalent. In those areas, I want to look at during what times shootings occur most and by who. Also, I want to look at when shootings are the most fatal. 
+
+# Step 1: When did shootings take place most frequently?
+```{r shootings_year, echo=FALSE, warning= FALSE}
+
+yearly_counts <- shootings %>% count(YEAR)
+ggplot(yearly_counts, aes(x = YEAR, y = n)) +
+  geom_line(color = "blue", size = 1) + 
+  geom_point(color = "red", size = 2) + 
+  labs(
+    title = "NY Shootings",
+    x = "Year",
+    y = "Number of Shootings"
+  ) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_x_continuous(
+    breaks = seq(min(yearly_counts$YEAR), max(yearly_counts$YEAR), by = 1)
+  )
+
+```
+Conclusion: Using this graph, I am able to conclude that there was a significant spike in shootings between 2020 and 2022 (likely tied to the pandemic).
+
+
+
+# Step 2: Where did shootings take place most frequently in 2020-2022 given there was a global pandemic.
+```{r location, echo=FALSE}
+
+shootings_1 <- shootings %>% 
+  mutate(LOCATION_DESC = case_when(LOCATION_DESC %in% c("None", "(null)", "None", "none", "NONE") ~ "Unknown",
+         TRUE ~ LOCATION_DESC
+  ))
+
+shootings_covid <- shootings_1 %>% filter(YEAR %in% c(2020,2021,2022))
+
+location_murd_cnt <- shootings_covid %>%
+  count(LOCATION_DESC, STATISTICAL_MURDER_FLAG)
+
+top_locations <- location_murd_cnt %>% 
+  group_by(LOCATION_DESC) %>%
+  summarise(total = sum(n)) %>%
+  arrange(desc(total)) %>%
+  slice_head(n = 10)
+  
+
+
+filtered_data <- location_murd_cnt %>%
+    filter(LOCATION_DESC %in% top_locations$LOCATION_DESC)
+
+
+
+ggplot(filtered_data, aes(x = reorder(LOCATION_DESC, -n), y = n, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_col(position = "stack") +
+  labs(
+    title = "Top 10 Shooting Locations",
+    x = "Location",
+    y = "Number of Shootings",
+    fill = "Murder?"
+  ) +
+
+  theme(axis.text.x = element_text(angle = 90))
+
+
+```
+It seems like there was a spike in crime in between 2020-2022. Most of it happened in housing only (likely due to covid). Multi Dwell - Public Housing, Apt build, PVT House.
+
+# Step 3: At What times did shootings take place? 
+```{r shooting_time, warning = FALSE}
+shootings_non_cov <- shootings %>% 
+  mutate(hr = hour(OCCUR_TIME), 
+         yr = year(OCCUR_DATE),
+         murder = ifelse(STATISTICAL_MURDER_FLAG == TRUE, "Murder", "Non-Murder")) %>%
+  filter(!yr %in% c(2020, 2021, 2022)) %>%
+  
+  group_by(hr, murder) %>% summarise(Count = n())
+
+
+ggplot(shootings_non_cov, aes(x= hr, y= Count, fill = murder)) + 
+geom_col() + 
+  scale_fill_manual(values = c("Murder" = "red", "Non-Murder" = "grey")) + 
+  labs(
+    x = "Hour of Day", 
+    y = "Number of Shootings",
+    fill = "Fatal", 
+    Title = "Shooting Hrs (Non Covid Years)"
+  ) +
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+We are able to see that during the Non Covid years (not including 2022-2022), shootings increase after 2 PM. Also, it is important to note that from 7PM onwards shootings generally increase in fatality. Now, I want to see if COVID had an impact on this? Did shootings start earlier since a large majority was unemployed? 
+
+# Step 4: Did time of shooting change during COVID? 
+```{r shoot_covid1}
+shootings_covid_1 <- shootings %>% 
+  mutate(hr = hour(OCCUR_TIME), 
+         yr = year(OCCUR_DATE),
+         murder = ifelse(STATISTICAL_MURDER_FLAG == TRUE, "Murder", "Non-Murder")) %>%
+  filter(yr %in% c(2020, 2021, 2022)) %>%
+  
+  group_by(hr, murder) %>% summarise(Count = n())
+
+ggplot(shootings_covid_1, aes(x= hr, y= Count, fill = murder)) + 
+geom_col() + 
+  scale_fill_manual(values = c("Murder" = "red", "Non-Murder" = "grey")) + 
+  labs(
+    x = "Hour of Day", 
+    y = "Number of Shootings",
+    fill = "Fatal"
+  ) +
+  theme(axis.text.x = element_text(angle = 90))
+
+
+shootings_covid_2 = shootings %>% group_by() %>%
+  summarise(
+    total_shootings = n(),
+    fatal = sum(STATISTICAL_MURDER_FLAG == TRUE)) %>%
+  mutate(murder_rate = fatal/total_shootings
+    
+  )
+
+
+```
+Looking at the COVID years, we see that in those 3 years, shootings followed the same trajectory; rapidly increasing after 2PM.
+
+# Step 5: Checking if In Covid Shootings Were More Fatal?
+```{r murder_rate_cov, warning = FALSE}
+shootings_period <- shootings %>%
+  mutate(Year = year(OCCUR_DATE), Hour = hour(hms(OCCUR_TIME)),
+    MurderFlag = ifelse(STATISTICAL_MURDER_FLAG == TRUE, "Murder", "Non-Murder"),
+    Period = ifelse(Year %in% c(2020, 2021, 2022), "COVID Years", "Pre/Post COVID")
+  )
+
+shootings_summary_period <- shootings_period %>%
+  group_by(Hour, Period) %>%
+  summarise( Total_Shootings = n(), Fatal_Shootings = sum(STATISTICAL_MURDER_FLAG == TRUE, na.rm = TRUE),
+  
+  ) %>%
+  mutate(
+    Murder_Rate = Fatal_Shootings / Total_Shootings
+  )
+
+ggplot(shootings_summary_period, aes(x = Hour, y = Murder_Rate, fill = Period)) +
+  geom_col(position = "dodge") +  
+  scale_fill_manual(values = c("COVID Years" = "blue", "Pre/Post COVID" = "grey")) +
+  labs(
+    title = "Fatality Rate of Shootings COVID Years vs Other Years",
+    x = "Hour of the Day",
+    y = "Murder Rate (Fatal/Total)",
+    fill = "Covid/Non Covid"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_minimal()
+
+```
+With this analysis, we can conclude that for the majoity of the hours, COVID years are more fatal due to lack of resources available and the fact that there were more shootings.
+
+
+## Model
+```{r shoot_hr}
+shootings_model_noncov <- shootings %>%
+  mutate(murder = ifelse(STATISTICAL_MURDER_FLAG == TRUE, 1, 0), Hour = hour(hms(OCCUR_TIME))) %>% filter(PERP_AGE_GROUP != "Unknown") %>%
+  filter(PERP_RACE != "Unknown") %>% filter(!YEAR %in% c(2020,2021,2022))
+
+model_age <- glm(murder ~ PERP_AGE_GROUP, data = shootings_model_noncov, family = "binomial")
+
+summary(model_age)
+
+
+```
+This shows that as age increases of the perp. chance of fatality also increases. Now lets see if this changed during covid?
+
+```{r shoot_covid}
+shootings_model_cov <- shootings %>%
+  mutate(murder = ifelse(STATISTICAL_MURDER_FLAG == TRUE, 1, 0), Hour = hour(hms(OCCUR_TIME))) %>%
+  filter(PERP_AGE_GROUP != "Unknown") %>% filter(PERP_RACE != "Unknown") %>%  filter(YEAR %in% c(2020,2021,2022))
+
+model_age <- glm(murder ~ PERP_AGE_GROUP, data = shootings_model_cov, family = "binomial")
+
+summary(model_age)
+
+
+```
+
+
+
+```{r extract}
+risk <- tibble(
+  AgeGroup = c("18-24", "25-44", "45-64", "65+"),
+  COVID = c(0.226, 0.433, 0.833, 1.227),
+  Non_COVID = c(0.159, 0.484, 0.841, 1.001)
+)
+```
+
+
+```{r clean}
+ggplot(risk, aes(x = AgeGroup)) +
+  geom_line(aes(y = COVID, color = "COVID Years", group = 1), size = 1.2) +
+  geom_line(aes(y = Non_COVID, color = "Pre/Post COVID", group = 1), size = 1.2) +
+  labs(
+    title = "Risk: Tatal Shootings by Age Group (COVID vs Non-COVID)",
+    x = "Perpetrator Age Group",
+    y = "Odds of Fatality",
+    color = "Period"
+  ) +
+  theme_minimal()
+```
+Whether COVID or not, Fatality odds were higher for older age groups. I had expected older groups to be weaker during COVID, but they had a higher success rate in COVID.
+
+## Conclusion 
+Overall, COVID was one of the deadliest times in NY, with shootings inclining significantly. We also noticed shootings increase in housing areas. Most of the shootings increases significantly after 3PM. The older generation was the most deadlier, even outside of COVID. In this whole analysis, Bias could be present to missing data points, only neighbourhoods with higher policing may have recorded data, COVID playing a factor and weaking immune systems, hence causing more fatalities.
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
